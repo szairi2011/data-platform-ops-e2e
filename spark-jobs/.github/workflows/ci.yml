@@ -1,0 +1,128 @@
+name: spark-jobs CI/CD
+
+# Trigger on every push to main and on PRs targeting main.
+# deploy job only runs on main push (not PRs) — requires self-hosted runner.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # JOB 1: Test & Assemble (GitHub-hosted runner — no Docker access)
+  # ─────────────────────────────────────────────────────────────────
+  test-and-build:
+    name: Test & Assemble fat JAR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 11 (Temurin) + sbt cache
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+          cache: sbt
+
+      - name: Run unit tests (no cluster required)
+        run: sbt test
+
+      - name: Assemble fat JAR
+        run: sbt assembly
+
+      # Upload the assembled JAR so the deploy job can download it.
+      # The JAR name contains the project version from build.sbt.
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark-jobs-assembly
+          path: target/scala-2.12/spark-jobs-assembly*.jar
+          retention-days: 7
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────
+  # JOB 2: Deploy to HDFS + notify Airflow
+  # Runs ONLY on pushes to main (not PRs).
+  # Requires a self-hosted GitHub Actions runner on the same machine
+  # that runs the Docker YARN cluster.
+  #
+  # Setup once on your machine:
+  #   https://docs.github.com/en/actions/hosting-your-own-runners
+  #   Register the runner for szairi2011/spark-jobs with label: self-hosted
+  # ─────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy JAR to HDFS & update Airflow Variable
+    needs: test-and-build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: self-hosted
+
+    env:
+      HDFS_JAR_PATH: hdfs:///jars/spark-jobs-assembly.jar
+      # Override via GitHub repo vars/secrets if Airflow runs on a different host/port
+      AIRFLOW_BASE_URL: ${{ vars.AIRFLOW_BASE_URL || 'http://localhost:8080' }}
+      AIRFLOW_USER: ${{ vars.AIRFLOW_USER || 'admin' }}
+      AIRFLOW_PASSWORD: ${{ secrets.AIRFLOW_PASSWORD }}
+
+    steps:
+      - name: Download JAR from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: spark-jobs-assembly
+          path: /tmp/spark-jobs-deploy
+
+      - name: Resolve JAR path
+        id: jar
+        run: |
+          JAR_FILE=$(ls /tmp/spark-jobs-deploy/spark-jobs-assembly*.jar | head -1)
+          echo "path=${JAR_FILE}" >> "$GITHUB_OUTPUT"
+          echo "Deploying: ${JAR_FILE}"
+
+      # Copy JAR into the namenode container, then use hdfs dfs -put to write to HDFS.
+      # -f flag overwrites any existing JAR at that path (idempotent).
+      - name: Upload JAR to HDFS via namenode container
+        run: |
+          docker cp "${{ steps.jar.outputs.path }}" namenode:/tmp/spark-jobs-assembly.jar
+          docker exec namenode hdfs dfs -mkdir -p /jars
+          docker exec namenode hdfs dfs -put -f /tmp/spark-jobs-assembly.jar "${HDFS_JAR_PATH}"
+          docker exec namenode rm /tmp/spark-jobs-assembly.jar
+
+      # Verify the JAR is reachable on HDFS before updating Airflow.
+      - name: Verify JAR on HDFS
+        run: |
+          docker exec namenode hdfs dfs -ls "${HDFS_JAR_PATH}"
+
+      # Update two Airflow Variables:
+      #   JAR_HDFS_PATH — the fixed HDFS path DAGs use for SparkSubmitOperator
+      #   JAR_VERSION   — git SHA for audit trail / rollback reference
+      #
+      # Airflow 3.x REST API: PATCH /api/v2/variables/{variableKey}
+      - name: Update Airflow Variables (JAR_HDFS_PATH + JAR_VERSION)
+        run: |
+          GIT_SHA="${{ github.sha }}"
+
+          update_variable() {
+            local KEY="$1"
+            local VALUE="$2"
+            HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+              -X PATCH \
+              "${AIRFLOW_BASE_URL}/api/v2/variables/${KEY}" \
+              -H "Content-Type: application/json" \
+              -u "${AIRFLOW_USER}:${AIRFLOW_PASSWORD}" \
+              -d "{\"key\": \"${KEY}\", \"value\": \"${VALUE}\"}" 2>&1)
+            if [ "$HTTP_STATUS" = "404" ]; then
+              # Variable does not exist yet — create it
+              curl -sf \
+                -X POST \
+                "${AIRFLOW_BASE_URL}/api/v2/variables" \
+                -H "Content-Type: application/json" \
+                -u "${AIRFLOW_USER}:${AIRFLOW_PASSWORD}" \
+                -d "{\"key\": \"${KEY}\", \"value\": \"${VALUE}\"}"
+            fi
+            echo "Set ${KEY}=${VALUE}"
+          }
+
+          update_variable "JAR_HDFS_PATH" "${HDFS_JAR_PATH}"
+          update_variable "JAR_VERSION"   "${GIT_SHA}"

@@ -1,0 +1,1 @@
+["com.dataplatform.bronze.BronzeIngester","com.dataplatform.compaction.CompactionJob","com.dataplatform.gold.GoldAggregator","com.dataplatform.silver.SilverTransformer"]

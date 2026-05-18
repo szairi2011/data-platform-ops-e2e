@@ -1,0 +1,14 @@
+# docker-compose.yml — Thin orchestrator
+# This file does NOT define services directly. It delegates to each submodule's
+# own compose file via the `include:` directive (Compose v2.20+).
+#
+# For granular startup (laptop-safe), prefer using ops.sh:
+#   ./ops.sh start yarn|airflow|governance|all
+#
+# To start everything at once:
+#   docker compose up -d
+
+include:
+  - path: yarn-cluster/docker-compose.yml
+  - path: airflow-dags-prod/docker-compose.yml
+  - path: data-governance/docker-compose.yml

@@ -1,0 +1,15 @@
+[submodule "yarn-cluster"]
+	path = yarn-cluster
+	url = https://github.com/szairi2011/yarn-cluster.git
+
+[submodule "spark-jobs"]
+	path = spark-jobs
+	url = https://github.com/szairi2011/spark-jobs.git
+
+[submodule "airflow-dags-prod"]
+	path = airflow-dags-prod
+	url = https://github.com/szairi2011/airflow-dags-prod.git
+
+[submodule "data-governance"]
+	path = data-governance
+	url = https://github.com/szairi2011/data-governance.git

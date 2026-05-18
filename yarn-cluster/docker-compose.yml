@@ -1,0 +1,238 @@
+# yarn-cluster/docker-compose.yml
+# Standalone YARN + Spark + HMS + Livy + JupyterHub stack.
+# Run `./scripts/build.sh` before first `docker compose up`.
+#
+# Network `spark-net` is declared external so airflow-dags-prod
+# and data-governance stacks can join it by name.
+
+networks:
+  spark-net:
+    name: spark-net
+    driver: bridge
+
+volumes:
+  namenode-data:
+  datanode1-data:
+  datanode2-data:
+  postgres-data:
+
+services:
+
+  # ── HDFS ────────────────────────────────────────────────────────────────
+
+  namenode:
+    build:
+      context: .
+      dockerfile: docker/hadoop/Dockerfile
+    image: yarn-cluster-hadoop:latest
+    container_name: namenode
+    hostname: namenode
+    environment:
+      CLUSTER_NAME: yarn-cluster
+    ports:
+      - "9870:9870"   # NameNode Web UI
+      - "9000:9000"   # HDFS RPC
+    volumes:
+      - namenode-data:/opt/hadoop/data/namenode
+      - ./config/hadoop:/opt/hadoop/etc/hadoop:ro
+    command: ["hdfs", "namenode"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9870 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - spark-net
+
+  datanode1:
+    image: yarn-cluster-hadoop:latest
+    container_name: datanode1
+    hostname: datanode1
+    depends_on:
+      namenode:
+        condition: service_healthy
+    volumes:
+      - datanode1-data:/opt/hadoop/data/datanode
+      - ./config/hadoop:/opt/hadoop/etc/hadoop:ro
+    command: ["hdfs", "datanode"]
+    ports:
+      - "9864:9864"
+    networks:
+      - spark-net
+
+  datanode2:
+    image: yarn-cluster-hadoop:latest
+    container_name: datanode2
+    hostname: datanode2
+    depends_on:
+      namenode:
+        condition: service_healthy
+    volumes:
+      - datanode2-data:/opt/hadoop/data/datanode
+      - ./config/hadoop:/opt/hadoop/etc/hadoop:ro
+    command: ["hdfs", "datanode"]
+    ports:
+      - "9865:9864"
+    networks:
+      - spark-net
+
+  # ── YARN ────────────────────────────────────────────────────────────────
+
+  resourcemanager:
+    image: yarn-cluster-hadoop:latest
+    container_name: resourcemanager
+    hostname: resourcemanager
+    depends_on:
+      namenode:
+        condition: service_healthy
+    volumes:
+      - ./config/hadoop:/opt/hadoop/etc/hadoop:ro
+    command: ["yarn", "resourcemanager"]
+    ports:
+      - "8088:8088"   # ResourceManager Web UI
+      - "8032:8032"   # RM RPC
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8088/ws/v1/cluster/info || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+    networks:
+      - spark-net
+
+  nodemanager1:
+    build:
+      context: .
+      dockerfile: docker/nodemanager/Dockerfile
+    container_name: nodemanager1
+    hostname: nodemanager1
+    depends_on:
+      resourcemanager:
+        condition: service_healthy
+    volumes:
+      - ./config/hadoop:/opt/hadoop/etc/hadoop:ro
+    command: ["yarn", "nodemanager"]
+    ports:
+      - "8042:8042"
+    networks:
+      - spark-net
+
+  nodemanager2:
+    build:
+      context: .
+      dockerfile: docker/nodemanager/Dockerfile
+    container_name: nodemanager2
+    hostname: nodemanager2
+    depends_on:
+      resourcemanager:
+        condition: service_healthy
+    volumes:
+      - ./config/hadoop:/opt/hadoop/etc/hadoop:ro
+    command: ["yarn", "nodemanager"]
+    ports:
+      - "8043:8042"
+    networks:
+      - spark-net
+
+  # ── Hive Metastore ───────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    hostname: postgres
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: hive
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - spark-net
+
+  hive-metastore:
+    build:
+      context: .
+      dockerfile: docker/hive-metastore/Dockerfile
+    container_name: hive-metastore
+    hostname: hive-metastore
+    depends_on:
+      - postgres
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      SERVICE_OPTS: >-
+        -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+        -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/hive
+        -Djavax.jdo.option.ConnectionUserName=hive
+        -Djavax.jdo.option.ConnectionPassword=hive
+    ports:
+      - "9083:9083"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9083 || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+    networks:
+      - spark-net
+
+  # ── Livy ────────────────────────────────────────────────────────────────
+
+  livy:
+    build:
+      context: .
+      dockerfile: docker/livy/Dockerfile
+    container_name: livy
+    hostname: livy
+    depends_on:
+      resourcemanager:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
+    environment:
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      YARN_CONF_DIR: /opt/hadoop/etc/hadoop
+      SPARK_HOME: /opt/spark
+    volumes:
+      - ./config/hadoop:/opt/hadoop/etc/hadoop:ro
+      - ./config/livy/livy.conf:/opt/livy/conf/livy.conf:ro
+      - ./config/livy/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+    ports:
+      - "8998:8998"
+    networks:
+      - spark-net
+
+  # ── HDFS Init ───────────────────────────────────────────────────────────
+
+  init-hdfs:
+    image: yarn-cluster-hadoop:latest
+    container_name: init-hdfs
+    depends_on:
+      namenode:
+        condition: service_healthy
+    volumes:
+      - ./config/hadoop:/opt/hadoop/etc/hadoop:ro
+      - ./scripts/init-hdfs.sh:/init-hdfs.sh:ro
+    command: ["/bin/bash", "/init-hdfs.sh"]
+    restart: on-failure
+    networks:
+      - spark-net
+
+  # ── JupyterHub ──────────────────────────────────────────────────────────
+
+  jupyterhub:
+    build:
+      context: .
+      dockerfile: docker/jupyterhub/Dockerfile
+    container_name: jupyterhub
+    hostname: jupyterhub
+    depends_on:
+      - livy
+    environment:
+      DOCKER_NETWORK_NAME: spark-net
+      HUB_IP: jupyterhub
+    volumes:
+      - ./config/jupyterhub/jupyterhub_config.py:/srv/jupyterhub/jupyterhub_config.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    ports:
+      - "8000:8000"
+    networks:
+      - spark-net
