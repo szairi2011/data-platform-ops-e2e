@@ -1,6 +1,0 @@
-#Successful Tests
-#Fri May 15 16:53:03 CET 2026
-com.dataplatform.silver.SilverTransformerSpec=1778860382213
-com.dataplatform.gold.GoldAggregatorSpec=1778860380735
-com.dataplatform.bronze.BronzeIngesterSpec=1778860383093
-com.dataplatform.compaction.CompactionJobSpec=1778860378014
