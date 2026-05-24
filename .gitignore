@@ -1,0 +1,12 @@
+# IDE caches
+.metals/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# DuckDB query output — generated Parquet data, not source
+duckdb_sql_queries/bronze-transactions/
+duckdb_sql_queries/silver-transactions/

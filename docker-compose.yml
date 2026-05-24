@@ -7,8 +7,19 @@
 #
 # To start everything at once:
 #   docker compose up -d
+#
+# Network ownership: spark-net is OWNED here at the umbrella level.
+# Each submodule declares it as external so both standalone ops.sh usage
+# and umbrella `docker compose up` work without conflicts.
+# ops.sh creates the network (idempotent) before starting any stack.
+
+networks:
+  spark-net:
+    name: spark-net
+    driver: bridge
 
 include:
   - path: yarn-cluster/docker-compose.yml
   - path: airflow-dags-prod/docker-compose.yml
-  - path: data-governance/docker-compose.yml
+  - path: gitlab-runner/docker-compose.yml
+  # data-governance/docker-compose.yml added when stack is ready

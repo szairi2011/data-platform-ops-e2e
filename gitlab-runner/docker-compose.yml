@@ -1,0 +1,37 @@
+# gitlab-runner/docker-compose.yml
+#
+# Self-hosted GitLab Runner for the spark-jobs pipeline.
+# Joins spark-net so the shell executor can reach:
+#   - namenode    (hdfs dfs commands via docker exec)
+#   - airflow-apiserver (Airflow REST API on port 8080)
+#
+# One-time setup after first start:
+#   ./ops.sh register runner
+#   (or: docker exec -it gitlab-runner gitlab-runner register)
+#
+# Network is declared external — owned by the umbrella docker-compose.yml.
+# ops.sh creates it automatically before starting any stack.
+
+networks:
+  spark-net:
+    name: spark-net
+    external: true
+
+volumes:
+  gitlab-runner-config:
+
+services:
+  gitlab-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gitlab-runner-spark:latest
+    container_name: gitlab-runner
+    restart: unless-stopped
+    volumes:
+      # Docker socket — lets the shell executor run docker cp / docker exec
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persists config.toml written by `gitlab-runner register`
+      - gitlab-runner-config:/etc/gitlab-runner
+    networks:
+      - spark-net
