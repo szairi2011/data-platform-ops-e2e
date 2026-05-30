@@ -13,3 +13,6 @@
 [submodule "data-governance"]
 	path = data-governance
 	url = https://github.com/szairi2011/data-governance.git
+[submodule "data-quality-contracts"]
+	path = data-quality-contracts
+	url = https://github.com/szairi2011/data-quality-contracts.git
