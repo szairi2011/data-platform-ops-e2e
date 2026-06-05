@@ -19,3 +19,11 @@
 [submodule "data-platform-portal"]
 	path = data-platform-portal
 	url = https://github.com/szairi2011/data-platform-portal.git
+
+[submodule "core-banking"]
+	path = core-banking
+	url = https://github.com/szairi2011/core-banking.git
+
+[submodule "denodo-endpoints"]
+	path = denodo-endpoints
+	url = https://github.com/szairi2011/denodo-endpoints.git
